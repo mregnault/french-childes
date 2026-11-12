@@ -362,6 +362,9 @@ DE_CONTRACTIONS_VETOED = {'bein', 'vorn', 'hintern', 'inn', 'zun', 'ann',
 # which would make it a contraction instead and is handled above.
 DE_CLITIC_S = re.compile(r"^(.+[a-zäöüß])'s$", re.IGNORECASE)
 
+# MR: Claude
+FR_CONTRACTIONS = {'au': ('à', 'le'), 'aux': ('à', 'les')}
+
 
 def _it_verb_forms(lemmas):
     """
@@ -715,6 +718,34 @@ class ChatProcessor:
         """
         return bool(re.search(r'deu|german', getattr(self, 'language', '') or ''))
 
+    # MR: from Claude
+    def split_french_contractions(self, s, mwt, misc):
+        """
+        Splits French preposition+article contractions (au -> à le, aux -> à les)
+        into their two syntactic words and records the multiword-token group, the
+        same way split_german_contractions() does for German. The previous plain
+        string substitution produced correct FORM tokens but recorded no group,
+        so childes.py never wrote the required range line ("4-5\tau\t_\t...").
+        """
+        toks = s.split()
+        out, shift, groups = [], {}, []
+        for i, t in enumerate(toks, 1):
+            shift[i] = len(out) + 1
+            rep = FR_CONTRACTIONS.get(t.lower())
+            if rep:
+                prep, art = rep
+                if t[:1].isupper():
+                    prep = prep.capitalize()
+                groups.append((len(out) + 1, len(out) + 2, t, 'C'))
+                out.extend([prep, art])
+                continue
+            out.append(t)
+        if len(out) == len(toks):
+            return s, mwt, misc
+        mwt = [(shift[a], shift[b], f, tier) for (a, b, f, tier) in mwt] + groups
+        misc = {shift[k]: v for k, v in misc.items()}
+        return ' '.join(out), mwt, misc
+
     def split_enclitics(self):
         """
         Whether Italian verb+clitic forms are split into UD syntactic words here,
@@ -1019,6 +1050,7 @@ class ChatProcessor:
         misc.update(marks)
         return ' '.join(out), mwt, misc
 
+
     def tokenise(self, s, split_contractions=False, return_mwt=False):
         """
         Tokenises a string, with language-specific rules.
@@ -1044,11 +1076,13 @@ class ChatProcessor:
         """
         mwt, misc = [], {}
         if hasattr(self, 'language') and re.search(r'fra|french', self.language):
-            if split_contractions:
-                s = re.sub(r'\bAux\b', 'À les', s)
-                s = re.sub(r'\baux\b', 'à les', s)
-                s = re.sub(r'\bAu\b', 'À le', s)
-                s = re.sub(r'\bau\b', 'à le', s)
+            #if split_contractions:
+            if split_contractions and s.strip() and re.search(r'fra|french', getattr(self, 'language', '') or ''):
+                s, mwt, misc = self.split_french_contractions(s, mwt, misc)
+            #    s = re.sub(r'\bAux\b', 'À les', s)
+            #    s = re.sub(r'\baux\b', 'à les', s)
+            #    s = re.sub(r'\bAu\b', 'À le', s)
+            #    s = re.sub(r'\bau\b', 'à le', s)
             reBeginChar = re.compile(r'([\|\{\(\/\´\`\"\“»«°<])') 
             reEndChar = re.compile(r'([\]\|\}\/\`\"\”\“\),\;\:\!\?\.\%»«>])(?=\s|$)')   # also if followed by end of line
             reBeginString = re.compile(r'([dcjlmnstDCJLNMST]\'|[Qq]u\'|[Jj]usqu\'|[Ll]orsqu\')') 
